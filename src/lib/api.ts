@@ -38,11 +38,14 @@ export const resolveApiUrl = (path: string) => {
   return `${normalizedBaseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 };
 
+export type VideoProvider = "openai" | "gemini";
+
 export interface GenerateVideoRequest {
   petName: string;
   petBio: string;
   petImage: string;
   mimeType?: string;
+  provider?: VideoProvider;
 }
 
 export interface SocialCaptions {
@@ -62,6 +65,8 @@ export interface GenerateVideoResponse {
   videoUrl: string;
   captions?: SocialCaptions;
   hashtags?: string[];
+  provider?: VideoProvider;
+  providerLabel?: string;
 }
 
 export const inferDataUrlMimeType = (

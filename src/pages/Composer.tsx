@@ -4,19 +4,45 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Upload, Sparkles, Video, Share2, Loader2, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Navbar from "@/components/Navbar";
-import { GenerateVideoResponse, inferDataUrlMimeType, requestVideoGeneration } from "@/lib/api";
+import { GenerateVideoResponse, VideoProvider, inferDataUrlMimeType, requestVideoGeneration } from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+const PROVIDER_CONFIG: Record<
+  VideoProvider,
+  { label: string; helper: string; progress: string; successHint: string }
+> = {
+  openai: {
+    label: "OpenAI Sora",
+    helper: "Highest fidelity cinematic clips.",
+    progress: "Rendering with OpenAI Sora...",
+    successHint: "the OpenAI clip",
+  },
+  gemini: {
+    label: "Gemini Veo",
+    helper: "Fast Veo 3.1 preview from Google AI.",
+    progress: "Rendering with Gemini Veo...",
+    successHint: "the Gemini clip",
+  },
+};
+
+const PROVIDER_ORDER: VideoProvider[] = ["openai", "gemini"];
 
 const Composer = () => {
   const [petName, setPetName] = useState("");
   const [petBio, setPetBio] = useState("");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [provider, setProvider] = useState<VideoProvider>("openai");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [videoResult, setVideoResult] = useState<GenerateVideoResponse | null>(null);
   const { toast } = useToast();
+
+  const activeProviderLabel =
+    videoResult?.providerLabel ?? PROVIDER_CONFIG[provider].label;
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -36,9 +62,11 @@ const Composer = () => {
 
     setIsGenerating(true);
     setGenerationError(null);
+    const providerMeta = PROVIDER_CONFIG[provider];
+
     toast({
       title: "Campaign generating! 🎉",
-      description: "AI is creating your viral adoption content...",
+      description: `${providerMeta.label} is creating your adoption content...`,
     });
 
     try {
@@ -47,22 +75,25 @@ const Composer = () => {
         petBio,
         petImage: selectedImage,
         mimeType: inferDataUrlMimeType(selectedImage),
+        provider,
       });
 
       setVideoResult(result);
       toast({
         title: "Video ready!",
-        description: "Scroll down to preview and download the OpenAI clip.",
+        description: `Scroll down to preview and download ${
+          result.providerLabel ?? providerMeta.label
+        }.`,
       });
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
-          : "Something went wrong while talking to OpenAI.";
+          : "Something went wrong while talking to the AI provider.";
       setGenerationError(message);
       toast({
         title: "Generation failed",
-        description: message,
+        description: `${PROVIDER_CONFIG[provider].label} run failed: ${message}`,
         variant: "destructive",
       });
     } finally {
@@ -151,6 +182,48 @@ const Composer = () => {
                   </div>
                 </div>
 
+                <div className="space-y-2">
+                  <Label>AI Provider</Label>
+                  <RadioGroup
+                    value={provider}
+                    onValueChange={(value) =>
+                      setProvider((value as VideoProvider) ?? "openai")
+                    }
+                    className="grid gap-3 md:grid-cols-2"
+                  >
+                    {PROVIDER_ORDER.map((option) => {
+                      const optionId = `provider-${option}`;
+                      const isActive = provider === option;
+                      return (
+                        <div
+                          key={option}
+                          className={cn(
+                            "rounded-lg border p-3 transition hover:border-primary/70",
+                            isActive
+                              ? "border-primary bg-primary/5 shadow-sm"
+                              : "border-border"
+                          )}
+                        >
+                          <div className="flex items-start gap-3">
+                            <RadioGroupItem id={optionId} value={option} />
+                            <div>
+                              <Label
+                                htmlFor={optionId}
+                                className="font-semibold cursor-pointer"
+                              >
+                                {PROVIDER_CONFIG[option].label}
+                              </Label>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {PROVIDER_CONFIG[option].helper}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </RadioGroup>
+                </div>
+
                 <Button 
                   variant="hero" 
                   className="w-full" 
@@ -161,12 +234,12 @@ const Composer = () => {
                   {isGenerating ? (
                     <>
                       <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      Rendering with OpenAI Video...
+                      {PROVIDER_CONFIG[provider].progress}
                     </>
                   ) : (
                     <>
                       <Sparkles className="mr-2 h-5 w-5" />
-                      Generate Campaign
+                      Generate with {PROVIDER_CONFIG[provider].label}
                     </>
                   )}
                 </Button>
@@ -184,10 +257,10 @@ const Composer = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Video className="h-5 w-5 text-primary" />
-                    OpenAI Output
+                    {activeProviderLabel} Output
                   </CardTitle>
                   <CardDescription>
-                    Preview and share the AI-generated adoption story
+                    Preview and share the {activeProviderLabel} adoption story
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -204,6 +277,12 @@ const Composer = () => {
                         src={videoResult.videoUrl}
                       />
                       <div className="text-sm text-muted-foreground space-y-1">
+                        <p>
+                          <span className="font-semibold text-foreground">
+                            Provider:
+                          </span>{" "}
+                          {activeProviderLabel}
+                        </p>
                         <p>
                           <span className="font-semibold text-foreground">
                             Model:
@@ -235,7 +314,7 @@ const Composer = () => {
                         target="_blank"
                         rel="noreferrer"
                       >
-                        Open raw video file
+                        Open {activeProviderLabel} video file
                       </a>
                       {videoResult.captions && (
                         <div className="mt-4 space-y-3">
