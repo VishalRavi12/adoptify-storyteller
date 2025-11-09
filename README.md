@@ -1,73 +1,100 @@
-# Welcome to your Lovable project
+# Adoptify Storyteller
 
-## Project info
+Adoptify turns a single pet photo + short bio into a campaign-ready set of creative assets: hooks, captions, storyboard, voiceover, rendered video, suggested domains, and a proof-of-adoption mint. The frontend (Vite + React + Tailwind) is already wired up. This repo now includes a FastAPI backend that coordinates all of the AI and infra tracks you outlined for the hackathon.
 
-**URL**: https://lovable.dev/projects/09ebc4e1-244b-4b5f-8089-ba7f132e89a0
+## Recommended stack (as pitched to judges)
 
-## How can I edit this code?
+- **Frontend**: React + Vite + Tailwind, React Video Editor, Zustand, shadcn/ui
+- **Auth**: Auth0 (roles: Staff, Volunteer; MFA optional)
+- **AI**: OpenRouter (LLM text), Gemini API (multimodal storyboard), ElevenLabs (narration), Whisper/Workers AI (optional STT)
+- **Media**: OpenCV + FFmpeg (renders), Cloudflare R2 (storage), Cloudflare Images (thumbs)
+- **Backend**: FastAPI, async workers (Celery/RQ optional), Postgres (Supabase/Neon)
+- **Infra**: Cloudflare Workers (edge), DO Gradient or Vultr GPUs for heavier inference, Railway/Fly.io for the API
+- **Web3**: Solana badge mint via Cloudflare Worker + RPC provider
+- **Observability**: Sentry, Cloudflare Analytics, `/healthz`
 
-There are several ways of editing your application.
+## Backend folder structure
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/09ebc4e1-244b-4b5f-8089-ba7f132e89a0) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+```
+server/
+├─ app/
+│  ├─ config.py         # pydantic settings + provider flags
+│  ├─ main.py           # FastAPI factory + routers
+│  ├─ schemas.py        # Request/response contracts
+│  ├─ services/         # Provider clients (OpenRouter, Gemini, ElevenLabs, R2, renderer, Solana)
+│  └─ routes/           # REST endpoints (/ingest, /story, /voiceover, /render, /domains, /auth, /solana)
+├─ main.py              # uvicorn entry point
+└─ requirements.txt
 ```
 
-**Edit a file directly in GitHub**
+Each service module degrades gracefully: when `MOCK_MODE=true` (or the provider key is missing) the API returns synthetic data so the frontend keeps working offline.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Environment variables
 
-**Use GitHub Codespaces**
+Create `server/.env` (or export vars) with the keys you have available:
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+```
+OPENROUTER_API_KEY=...
+GEMINI_API_KEY=...
+ELEVEN_API_KEY=...
+MEDIA_BUCKET=adoptify-media
+MEDIA_ACCESS_KEY=...
+MEDIA_SECRET_KEY=...
+MEDIA_ENDPOINT=https://<account>.r2.cloudflarestorage.com
+MEDIA_BASE_URL=https://cdn.adoptify.pet
+SOLANA_WORKER_URL=https://worker.example.workers.dev/mint
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+AUTH0_DOMAIN=...
+AUTH0_CLIENT_ID=...
+AUTH0_CLIENT_SECRET=...
+MOCK_MODE=false
+```
 
-## What technologies are used for this project?
+Unset any provider to fall back to mock mode for just that integration.
 
-This project is built with:
+## Running the backend locally
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+```bash
+cd server
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
 
-## How can I deploy this project?
+The API mounts under `/api`. Pair it with the frontend dev server via `VITE_API_BASE=http://localhost:8000/api`.
 
-Simply open [Lovable](https://lovable.dev/projects/09ebc4e1-244b-4b5f-8089-ba7f132e89a0) and click on Share -> Publish.
+## Key endpoints
 
-## Can I connect a custom domain to my Lovable project?
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/health` | Health probe for Cloudflare Worker/Sentry |
+| `POST` | `/api/ingest` | Accepts `multipart/form-data` image upload → stores to R2/local tmp |
+| `POST` | `/api/story` | Calls multiple OpenRouter models, benchmarks latency/cost, returns best script, hooks, hashtags + Gemini storyboard |
+| `POST` | `/api/voiceover` | Sends script to ElevenLabs (or mock) and stores resulting MP3 |
+| `POST` | `/api/render` | Uses OpenCV + FFmpeg to create a vertical slideshow video, optionally muxing the ElevenLabs MP3 |
+| `POST` | `/api/domains/suggest` | Generates brandable domains (GoDaddy track) with scores/reasons |
+| `POST` | `/api/auth/webhook` | Placeholder for Auth0 role provisioning webhooks |
+| `POST` | `/api/solana/mint` | Calls a Cloudflare Worker that handles the on-chain mint, returns signature |
 
-Yes, you can!
+## Provider integration notes
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+- **OpenRouter**: `services/openrouter.py` loops through your preferred models (4o-mini, Claude Haiku, Gemma) and records latency + cost deltas for the judges demo switcher moment.
+- **Gemini Flash**: `services/gemini.py` asks for a storyboard + palette, so you can drop the result straight into the React “shot list” UI.
+- **ElevenLabs**: `services/elevenlabs.py` supports any voice ID; we default to “Rachel” but you can swap for a cloned shelter spokesperson.
+- **Renderer**: `services/renderer.py` keeps things lightweight for the hackathon (OpenCV slideshow + FFmpeg audio mux). Replace with a GPU worker later for more cinematic edits.
+- **Cloudflare / R2**: `services/storage.py` is S3-compatible. Point it at R2 or DO Spaces; fallback writes to `/tmp` for local dev.
+- **Solana**: `services/solana.py` expects a Worker endpoint that wraps whatever RPC flow you prefer (Helius, Triton, etc.).
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+## Suggested demo script
+
+1. Auth0 login → Staff role guard.
+2. Upload photo + bio → `POST /ingest` (see progress toast).
+3. Generate story → show OpenRouter model table + Gemini storyboard.
+4. “Add voice” → ElevenLabs returns MP3, highlight cost/time.
+5. “Render” → `/render` builds a vertical MP4; autoplay on canvas.
+6. Show domain suggestions + GoDaddy CTA.
+7. Mark adoption success → `/solana/mint` returns a signature and QR.
+
+## Testing
+
+The backend currently relies on integration testing via providers, but every route can be smoke-tested locally with HTTP clients such as `curl` or Bruno/Postman. Because of the mock mode, you can run `MOCK_MODE=true uvicorn main:app --reload` and hit each endpoint without secrets.
