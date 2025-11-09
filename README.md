@@ -1,100 +1,69 @@
 # Adoptify Storyteller
 
-Adoptify turns a single pet photo + short bio into a campaign-ready set of creative assets: hooks, captions, storyboard, voiceover, rendered video, suggested domains, and a proof-of-adoption mint. The frontend (Vite + React + Tailwind) is already wired up. This repo now includes a FastAPI backend that coordinates all of the AI and infra tracks you outlined for the hackathon.
+Turn a single pet photo and short bio into a share‑ready adoption campaign. The React/Vite frontend collects the pet details, while a lightweight Express backend calls OpenAI’s video API (Sora) plus a text model to produce:
 
-## Recommended stack (as pitched to judges)
+- A vertical MP4 clip narrated from the dog’s perspective
+- Viral captions tailored for Instagram, TikTok, and Facebook
+- SEO‑friendly “Smart Hashtags”
 
-- **Frontend**: React + Vite + Tailwind, React Video Editor, Zustand, shadcn/ui
-- **Auth**: Auth0 (roles: Staff, Volunteer; MFA optional)
-- **AI**: OpenRouter (LLM text), Gemini API (multimodal storyboard), ElevenLabs (narration), Whisper/Workers AI (optional STT)
-- **Media**: OpenCV + FFmpeg (renders), Cloudflare R2 (storage), Cloudflare Images (thumbs)
-- **Backend**: FastAPI, async workers (Celery/RQ optional), Postgres (Supabase/Neon)
-- **Infra**: Cloudflare Workers (edge), DO Gradient or Vultr GPUs for heavier inference, Railway/Fly.io for the API
-- **Web3**: Solana badge mint via Cloudflare Worker + RPC provider
-- **Observability**: Sentry, Cloudflare Analytics, `/healthz`
+## Prerequisites
 
-## Backend folder structure
+1. **Node.js 18+** (the repo currently runs with Node 25.1.0)
+2. **An OpenAI API key** with access to `sora-2` and a text model (defaults to `gpt-4o-mini`)
 
-```
-server/
-├─ app/
-│  ├─ config.py         # pydantic settings + provider flags
-│  ├─ main.py           # FastAPI factory + routers
-│  ├─ schemas.py        # Request/response contracts
-│  ├─ services/         # Provider clients (OpenRouter, Gemini, ElevenLabs, R2, renderer, Solana)
-│  └─ routes/           # REST endpoints (/ingest, /story, /voiceover, /render, /domains, /auth, /solana)
-├─ main.py              # uvicorn entry point
-└─ requirements.txt
-```
+## Configure environment
 
-Each service module degrades gracefully: when `MOCK_MODE=true` (or the provider key is missing) the API returns synthetic data so the frontend keeps working offline.
-
-## Environment variables
-
-Create `server/.env` (or export vars) with the keys you have available:
-
-```
-OPENROUTER_API_KEY=...
-GEMINI_API_KEY=...
-ELEVEN_API_KEY=...
-MEDIA_BUCKET=adoptify-media
-MEDIA_ACCESS_KEY=...
-MEDIA_SECRET_KEY=...
-MEDIA_ENDPOINT=https://<account>.r2.cloudflarestorage.com
-MEDIA_BASE_URL=https://cdn.adoptify.pet
-SOLANA_WORKER_URL=https://worker.example.workers.dev/mint
-SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-AUTH0_DOMAIN=...
-AUTH0_CLIENT_ID=...
-AUTH0_CLIENT_SECRET=...
-MOCK_MODE=false
-```
-
-Unset any provider to fall back to mock mode for just that integration.
-
-## Running the backend locally
+Use the sample file and insert your own key(s):
 
 ```bash
-cd server
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+cp .env.example .env
+# edit the file:
+#   OPENAI_API_KEY=sk-...
+#   OPENAI_VIDEO_MODEL=sora-2     # optional overrides
+#   OPENAI_TEXT_MODEL=gpt-4o-mini
 ```
 
-The API mounts under `/api`. Pair it with the frontend dev server via `VITE_API_BASE=http://localhost:8000/api`.
+`CLIENT_ORIGIN` should match the port Vite runs on (`http://localhost:8080` by default) so the backend’s CORS check succeeds.
 
-## Key endpoints
+## Install & run
+
+```bash
+npm install
+
+# terminal 1: backend (Express + OpenAI proxy)
+npm run server   # http://localhost:4000
+
+# terminal 2: frontend
+npm run dev      # http://localhost:8080
+```
+
+## Optional: generate from the CLI
+
+A helper script mirrors the backend workflow. Provide the pet inputs and it will submit/poll/download the resulting MP4:
+
+```bash
+pip install requests
+python scripts/run_openai_video.py \
+  --pet-name "Luna" \
+  --pet-bio "Playful retriever who adores kids."
+```
+
+## API overview
+
+The Express server exposes two routes:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | Health probe for Cloudflare Worker/Sentry |
-| `POST` | `/api/ingest` | Accepts `multipart/form-data` image upload → stores to R2/local tmp |
-| `POST` | `/api/story` | Calls multiple OpenRouter models, benchmarks latency/cost, returns best script, hooks, hashtags + Gemini storyboard |
-| `POST` | `/api/voiceover` | Sends script to ElevenLabs (or mock) and stores resulting MP3 |
-| `POST` | `/api/render` | Uses OpenCV + FFmpeg to create a vertical slideshow video, optionally muxing the ElevenLabs MP3 |
-| `POST` | `/api/domains/suggest` | Generates brandable domains (GoDaddy track) with scores/reasons |
-| `POST` | `/api/auth/webhook` | Placeholder for Auth0 role provisioning webhooks |
-| `POST` | `/api/solana/mint` | Calls a Cloudflare Worker that handles the on-chain mint, returns signature |
+| `POST` | `/api/generate-video` | Validates the payload, submits an OpenAI video job, polls until completion, and returns `{ videoUrl, captions, hashtags, ... }`. |
+| `GET` | `/api/video/:id/content` | Streams the rendered MP4 back to the browser (proxies OpenAI’s download endpoint). |
 
-## Provider integration notes
+The frontend consumes `requestVideoGeneration` from `src/lib/api.ts`, then renders the video alongside the generated captions/hashtags inside `src/pages/Composer.tsx`.
 
-- **OpenRouter**: `services/openrouter.py` loops through your preferred models (4o-mini, Claude Haiku, Gemma) and records latency + cost deltas for the judges demo switcher moment.
-- **Gemini Flash**: `services/gemini.py` asks for a storyboard + palette, so you can drop the result straight into the React “shot list” UI.
-- **ElevenLabs**: `services/elevenlabs.py` supports any voice ID; we default to “Rachel” but you can swap for a cloned shelter spokesperson.
-- **Renderer**: `services/renderer.py` keeps things lightweight for the hackathon (OpenCV slideshow + FFmpeg audio mux). Replace with a GPU worker later for more cinematic edits.
-- **Cloudflare / R2**: `services/storage.py` is S3-compatible. Point it at R2 or DO Spaces; fallback writes to `/tmp` for local dev.
-- **Solana**: `services/solana.py` expects a Worker endpoint that wraps whatever RPC flow you prefer (Helius, Triton, etc.).
+## Troubleshooting
 
-## Suggested demo script
+- **“Incorrect API key provided”** – update `OPENAI_API_KEY` in `.env`, restart `npm run server`.
+- **“Organization must be verified”** – finish OpenAI’s organization verification before using Sora.
+- **“Billing hard limit has been reached”** – add credits or request higher limits inside the OpenAI dashboard.
+- **Captions/hashtags missing** – the backend now falls back to heuristics if the text model fails, but check the server logs for `[openai-text]` warnings.
 
-1. Auth0 login → Staff role guard.
-2. Upload photo + bio → `POST /ingest` (see progress toast).
-3. Generate story → show OpenRouter model table + Gemini storyboard.
-4. “Add voice” → ElevenLabs returns MP3, highlight cost/time.
-5. “Render” → `/render` builds a vertical MP4; autoplay on canvas.
-6. Show domain suggestions + GoDaddy CTA.
-7. Mark adoption success → `/solana/mint` returns a signature and QR.
-
-## Testing
-
-The backend currently relies on integration testing via providers, but every route can be smoke-tested locally with HTTP clients such as `curl` or Bruno/Postman. Because of the mock mode, you can run `MOCK_MODE=true uvicorn main:app --reload` and hit each endpoint without secrets.
+Happy building! 🐾

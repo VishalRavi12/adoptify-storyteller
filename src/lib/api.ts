@@ -1,125 +1,111 @@
-const API_BASE = (import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api").replace(/\/$/, "");
+type Nullable<T> = T | null | undefined;
 
-async function request<T>(path: string, options: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, options);
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const data = await response.json();
-      message = data?.detail ?? data?.message ?? message;
-    } catch {
-      const text = await response.text();
-      if (text) {
-        message = text;
-      }
+const inferDefaultBaseUrl = () => {
+  if (typeof window === "undefined" || !window.location) {
+    return "";
+  }
+
+  const { protocol, hostname, port } = window.location;
+  const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+
+  if (isLocalHost) {
+    const devPorts = new Set(["", "3000", "4173", "5173", "5174", "5175", "5176", "8080"]);
+    if (!port || devPorts.has(port)) {
+      return `${protocol}//${hostname}:4000`;
     }
-    throw new Error(message || "Request failed");
   }
-  return response.json() as Promise<T>;
-}
 
-export interface MediaIngestResponse {
-  asset_id: string;
-  media_url: string;
-  checksum: string;
-}
+  return window.location.origin;
+};
 
-export interface StoryResponse {
-  pet_name: string;
-  script: string;
-  caption_variants: string[];
-  hook_variants: string[];
-  hashtags: string[];
-  storyboard?: string;
-  palette?: string[];
-  provider_results: {
-    model: string;
-    latency_ms: number;
-    cost_usd: number;
-    content: string;
-  }[];
-}
+const normalizedBaseUrl =
+  (import.meta.env.VITE_API_BASE_URL as Nullable<string>)?.replace(/\/$/, "") ||
+  inferDefaultBaseUrl();
 
-export interface VoiceoverResponse {
-  url?: string | null;
-  local_path?: string | null;
-  duration_seconds?: number | null;
-}
-
-export interface RenderResponse {
-  video_url?: string | null;
-  storyboard_preview?: string | null;
-  rendered_at: string;
-}
-
-export interface DomainSuggestion {
-  domain: string;
-  score: number;
-  reason: string;
-}
-
-export interface DomainSuggestionResponse {
-  suggestions: DomainSuggestion[];
-}
-
-export async function ingestMedia(file: File) {
-  const formData = new FormData();
-  formData.append("file", file);
-  return request<MediaIngestResponse>("/ingest", {
-    method: "POST",
-    body: formData,
-  });
-}
-
-export async function createStory(payload: {
-  pet_name: string;
-  bio: string;
-  traits?: string[];
-  image_url?: string;
-}) {
-  return request<StoryResponse>("/story", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function createVoiceover(payload: { script: string; voice_id?: string; format?: string }) {
-  return request<VoiceoverResponse>("/voiceover", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function renderVideo(payload: {
-  pet_name: string;
-  script: string;
-  captions: string[];
-  media_url?: string;
-  voiceover_url?: string;
-}) {
-  return request<RenderResponse>("/render", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function suggestDomains(payload: { pet_name: string; location?: string; keywords?: string[]; tlds?: string[] }) {
-  return request<DomainSuggestionResponse>("/domains/suggest", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export function resolveMediaUrl(raw?: string | null) {
-  if (!raw) return "";
-  if (raw.startsWith("http")) {
-    return raw;
+export const resolveApiUrl = (path: string) => {
+  if (!path) {
+    return normalizedBaseUrl;
   }
-  return `${API_BASE}/media/local?path=${encodeURIComponent(raw)}`;
+
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  if (!normalizedBaseUrl) {
+    return path;
+  }
+
+  return `${normalizedBaseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+};
+
+export interface GenerateVideoRequest {
+  petName: string;
+  petBio: string;
+  petImage: string;
+  mimeType?: string;
 }
 
-export { API_BASE };
+export interface SocialCaptions {
+  instagram?: string;
+  tiktok?: string;
+  facebook?: string;
+}
+
+export interface GenerateVideoResponse {
+  status: string;
+  message: string;
+  jobId: string;
+  prompt: string;
+  model?: string;
+  seconds?: string;
+  size?: string;
+  videoUrl: string;
+  captions?: SocialCaptions;
+  hashtags?: string[];
+}
+
+export const inferDataUrlMimeType = (
+  dataUrl: Nullable<string>,
+  fallback = "image/png",
+) => {
+  if (!dataUrl) {
+    return fallback;
+  }
+  const match = dataUrl.match(/^data:(.*?);base64,/);
+  return match?.[1] || fallback;
+};
+
+export const requestVideoGeneration = async (
+  payload: GenerateVideoRequest,
+): Promise<GenerateVideoResponse> => {
+  const response = await fetch(resolveApiUrl("/api/generate-video"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const detail =
+      typeof data?.details === "string" && data.details.length > 0
+        ? ` ${data.details}`
+        : "";
+    const errorMessage =
+      typeof data?.error === "string"
+        ? `${data.error}${detail}`
+        : "Server could not render the requested video.";
+    throw new Error(errorMessage.trim());
+  }
+
+  if (!data?.videoUrl) {
+    throw new Error("Server finished but did not return a video URL.");
+  }
+
+  return {
+    ...data,
+    videoUrl: resolveApiUrl(data.videoUrl),
+  } as GenerateVideoResponse;
+};
